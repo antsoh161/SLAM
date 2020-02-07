@@ -1,0 +1,21 @@
+PC2 to 2d
+rosrun pointcloud_to_laserscan pointcloud_to_laserscan_node cloud_in:=//os1_cloud_node/points
+rosrun tf static_transform_publisher 0 0 0 0 0 0 base_link os1_sensor 100
+
+
+rosrun am_driver hrp_teleop.py
+rosrun joy joy_node
+
+
+//SSH
+ssh ipw_2020@192.168.222.126 //(Robot IP)
+password ipw_2020_t108
+
+export ROS_IP='192.168.222.126' 
+export ROS_MASTER_URI=http://192.168.222.126:11311
+export ROS_HOSTNAME='192.168.222.126
+
+//On remote computer in local terminal
+export ROS_IP='192.168.222.132' //Remote PC IP
+export ROS_MASTER_URI=http://192.168.222.126:11311 //Robot IP Master
+export ROS_HOSTNAME='192.168.222.132 //Remote PC IP

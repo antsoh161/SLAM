@@ -1,5 +1,8 @@
-PC2 to 2d
-rosrun pointcloud_to_laserscan pointcloud_to_laserscan_node cloud_in:=//os1_cloud_node/points
+
+roslaunch os1.launch os1_hostname:=10.5.5.54 os1_udp_dest:=10.5.5.1 lidar_mode:=2048x10 viz:=false
+
+roslaunch os1.launch os1_hostname:=192.168.0.54 os1_udp_dest:=192.168.0.2 lidar_mode:=2048x10 viz:=false
+
 rosrun tf static_transform_publisher 0 0 0 0 0 0 base_link os1_sensor 100
 
 

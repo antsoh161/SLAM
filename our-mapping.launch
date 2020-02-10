@@ -1,0 +1,7 @@
+<launch>
+	<include file="$(find pc2l)/launch/pc2l.launch"/>
+	<include file="$(find ouster_ros)/launch/os1_custom.launch"/>
+	<include file="$(find am_driver_safe)/launch/automower_hrp.launch"/>
+	<node pkg="tf" type="static_transform_publisher" name="static_transform_publisher" output="screen" args="0 0 0 0 0 0 base_link os1_sensor 100"/>
+	<node pkg="gmapping" type="slam_gmapping" name="slam_gmapping" output="screen"/>
+</launch>

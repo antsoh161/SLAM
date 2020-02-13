@@ -1,4 +1,5 @@
 
+
 roslaunch os1.launch os1_hostname:=10.5.5.54 os1_udp_dest:=10.5.5.1 lidar_mode:=2048x10 viz:=false
 
 roslaunch os1.launch os1_hostname:=192.168.0.54 os1_udp_dest:=192.168.0.2 lidar_mode:=2048x10 viz:=false

@@ -42,6 +42,10 @@ void laserscan_callback(const sensor_msgs::LaserScan::ConstPtr& scan_msg)
 	scangrid_msg.info.width = 400; //width = 400 cells, cellsize=0.05m => 20m
 	scangrid_msg.info.height = 400; //height = 400 cells, cellsize=0.05m => 20m
 	scangrid_msg.info.resolution = 0.05f;
+	scangrid_msg.info.origin.position.x = 0;
+	scangrid_msg.info.origin.position.y = 0;
+	scangrid_msg.info.origin.position.z = 0;
+
 
 	//Fill grid with data from laserscans
 	scangrid_msg.data.resize(scangrid_msg.info.width * scangrid_msg.info.height, 50); //fill with 50 = unknown
@@ -64,9 +68,10 @@ void laserscan_callback(const sensor_msgs::LaserScan::ConstPtr& scan_msg)
 		float dx = cos(angle);
 #if DEBUG
 //		if(temp == 0)ROS_INFO("Angle: %.3f | dx: %.3f | dy: %.3f ", angle, dx, dy);
-		float obstacle_dist = scan_msg->ranges[i]/0.05;//5/0.05;//scan_msg->ranges[i]/0.05;
+		float obstacle_dist = scan_msg->ranges[i]/0.05f;
+//		float obstacle_dist = 10.0f/0.05f;
 #else
-		float obstacle_dist = scan_msg->ranges[i]/0.05;
+		float obstacle_dist = scan_msg->ranges[i]/0.05f;
 #endif
 		int y_min = 400;
 		int y_max = 0;
@@ -84,6 +89,7 @@ void laserscan_callback(const sensor_msgs::LaserScan::ConstPtr& scan_msg)
 			if(floor(dist) >= floor(obstacle_dist))
 			{
 				scangrid_msg.data[xa + ya * scangrid_msg.info.width] = 100;
+				break;
 			}
 			scangrid_msg.data[xa + ya * scangrid_msg.info.width] = 0;
 			xDist += dx;

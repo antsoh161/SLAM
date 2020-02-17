@@ -74,10 +74,11 @@ int main(int argc, char* argv[])
 
 			for(int y = 0; y < 1000; y++)
 			{
-				float ya = (float)y / 0.05f; //to world coordinate
+//TODO: ERROR is most likely here, do * 0.05f instead of / 0.05f for xa and ya!!!!!!!!!!!!!!!
+				float ya = (float)y / 0.05f - 500.0f; //to world coordinate
 				for(int x = 0; x < 1000; x++)
 				{
-					float xa = (float)x / 0.05f; //to world coordinate
+					float xa = (float)x / 0.05f - 500.0f; //to world coordinate
 					int index = x + y * 1000;
 					float cell_value = 0;
 					int num_reaching_cell = 0;
@@ -86,8 +87,10 @@ int main(int argc, char* argv[])
 						float dx = xa - x_pos[i];
 						float dy = ya - y_pos[i];
 						float distance_from_sensor_reading = std::sqrt(dx*dx + dy*dy);
+						ROS_INFO("Dist %f | (%f, %f)", distance_from_sensor_reading, xa, ya);
 						if(distance_from_sensor_reading <= sensor_range)
 						{
+							ROS_INFO("Using Sensor %d", i);
 							//calculate angle from sensor reading to grid cell
 							float angle = std::atan2(dy, dx);
 
@@ -116,6 +119,7 @@ int main(int argc, char* argv[])
 					if(num_reaching_cell > 0)
 					{
 						cell_value /= num_reaching_cell;
+						ROS_INFO("%d Cell Value: %f, %d, %d", index, cell_value, cell_value, num_reaching_cell);
 					}else
 					{
 						cell_value = 50; //unkown otherwise

@@ -32,3 +32,5 @@
 *.app
 
 .catkin_tools
+
+*.swp

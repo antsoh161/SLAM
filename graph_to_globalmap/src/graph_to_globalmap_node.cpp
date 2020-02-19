@@ -15,7 +15,7 @@
 #define MAP_WIDTH 1000
 #define MAP_HEIGHT 1000
 #define MAP_RESOLUTION 0.05f
-#define NUM_GRAPH_POINTS 100
+#define NUM_GRAPH_POINTS 10
 #define DIST_BETWEEN_POINTS 0.2f
 
 sensor_msgs::LaserScan scanTempArray[NUM_GRAPH_POINTS];
@@ -178,6 +178,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	        {
         	        float xDist = 0;
                 	float yDist = 0;
+
 			//@Todo: adjust with position of scan
 			int x_start = x0 + x_pos[k] / MAP_RESOLUTION;
 			int y_start = y0 + y_pos[k] / MAP_RESOLUTION;

@@ -157,6 +157,8 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	int y0 = MAP_HEIGHT / 2;
 	ROS_INFO("Generating globalmap from graph");
 
+	float sensor_range = 10.0f / MAP_RESOLUTION;
+
 	//Loop through all points in graph
 	for(int k = 0; k < 10; k++)
 	{
@@ -178,13 +180,14 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 			float dy = sin(angle);
                 	float dx = cos(angle);
 
-                	float obstacle_dist = scan.ranges[i]/0.05f;
+                	float obstacle_dist = scan.ranges[i]/MAP_RESOLUTION;
 
 	                while(xa >= 0 && xa < MAP_WIDTH && ya >= 0 && ya < MAP_HEIGHT)
         	        {
-                	        int value = 0;
 				int index = xa + ya * globalmap_msg.info.width;
                         	float dist = std::sqrt(xDist*xDist + yDist*yDist);
+
+				if(dist >= sensor_range)break;
 
                        		if(floor(dist) >= floor(obstacle_dist))
                         	{
@@ -216,7 +219,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	for(int i = 0; i < MAP_WIDTH*MAP_HEIGHT; i++)
 	{
 		if(num_for_average.data[i] == 0)continue;
-		float average = (float)globalmap_msg.data[i] / num_for_average.data[i];
+		float average = (float)globalmap_msg.data[i] / (float)num_for_average.data[i];
 		average *= 100;
 		globalmap_msg.data[i] = (char)average;
 	}

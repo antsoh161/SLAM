@@ -150,15 +150,20 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	//Resize the array to hold the map size. Set default value 50, for unknown
 	globalmap_msg.data.resize(MAP_WIDTH * MAP_HEIGHT, 50);
 
-	//Not optimízing, don't use this for final code. 
+
+	//@Todo:don't use this. --  Not optimízing, don't use this for final code. 
 	nav_msgs::OccupancyGrid num_for_average;
 	num_for_average.data.resize(MAP_WIDTH * MAP_HEIGHT, 0);
 
+
+	//Start at center of map
 	int x0 = MAP_WIDTH / 2;
 	int y0 = MAP_HEIGHT / 2;
 	ROS_INFO("Generating globalmap from graph");
 
+	//For debugging only use obstacle iformation within 10m radius.
 	float sensor_range = 10.0f / MAP_RESOLUTION;
+
 
 	//Loop through all points in graph
 	for(int k = 0; k < NUM_GRAPH_POINTS; k++)
@@ -174,8 +179,11 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
         	        float xDist = 0;
                 	float yDist = 0;
 			//@Todo: adjust with position of scan
-	                int xa = x0 + x_pos[k] / MAP_RESOLUTION;
-	                int ya = y0 + y_pos[k] / MAP_RESOLUTION;
+			int x_start = x0 + x_pos[k] / MAP_RESOLUTION;
+			int y_start = y0 + y_pos[k] / MAP_RESOLUTION;
+
+	                int xa = x_start;
+	                int ya = y_start;
 			//take into account the current rotation of the robot(yaw)
 	                float angle = yaw[k] + scan.angle_min + i * scan.angle_increment;
 			float dy = sin(angle);
@@ -198,7 +206,9 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 					else
 						globalmap_msg.data[index] += 1;
 					num_for_average.data[index] += 1;
-                                	break;
+
+                                	//this ray has reached it's destination, go to next ray.
+					break;
                         	}
 				//@Todo: combine with value in cell
 				if(num_for_average.data[index] == 0)
@@ -209,22 +219,28 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 				xDist += dx;
                         	yDist += dy;
 
-                        	xa = x0 + xDist;
-                        	ya = y0 + yDist;
+                        	xa = x_start + xDist;
+                        	ya = y_start + yDist;
                 	}
 
 	        }
 	}
 
-	//compute average
+	//compute average of sensor information for each cell
 	for(int i = 0; i < MAP_WIDTH*MAP_HEIGHT; i++)
 	{
+		//Don't need to compute average if cell hasn't been reached by a ray. It's unknown: 50
 		if(num_for_average.data[i] == 0)continue;
+
+		//Compute average for cell and rescale to range 0 -> 100
 		float average = (float)globalmap_msg.data[i] / (float)num_for_average.data[i];
 		average *= 100;
+
+		//Store average
 		globalmap_msg.data[i] = (char)average;
 	}
 
+	//Publish global map
 	gridmap_pub.publish(globalmap_msg);
 }
 

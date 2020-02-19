@@ -15,11 +15,13 @@
 #define MAP_WIDTH 1000
 #define MAP_HEIGHT 1000
 #define MAP_RESOLUTION 0.05f
+#define NUM_GRAPH_POINTS 100
+#define DIST_BETWEEN_POINTS 0.2f
 
-sensor_msgs::LaserScan scanTempArray[10];
-float x_pos[10];
-float y_pos[10];
-float yaw[10];
+sensor_msgs::LaserScan scanTempArray[NUM_GRAPH_POINTS];
+float x_pos[NUM_GRAPH_POINTS];
+float y_pos[NUM_GRAPH_POINTS];
+float yaw[NUM_GRAPH_POINTS];
 
 int current_index = 0;
 
@@ -39,7 +41,7 @@ float getYaw(const geometry_msgs::Quaternion quat)
 void syncedCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const nav_msgs::Odometry::ConstPtr& odom_msg)
 {
 
-	if(current_index >= 10)return;
+	if(current_index >= NUM_GRAPH_POINTS)return;
 //	ROS_INFO("We are synchronized %s, %s", scan_msg->header.frame_id.c_str(), odom_msg->header.frame_id.c_str());
 	geometry_msgs::Point p = odom_msg->pose.pose.position;
 	if(current_index == 0)
@@ -51,9 +53,8 @@ void syncedCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const nav_
 		y_pos[0] = p.y;
 		yaw[0] = getYaw(odom_msg->pose.pose.orientation);
 		current_index++;
-	}else if(current_index < 10)
-	{
-		if(std::abs(p.x - x_pos[current_index - 1]) >= 1 || std::abs(p.y - y_pos[current_index - 1]) >= 1 )
+	}else {
+		if(std::abs(p.x - x_pos[current_index - 1]) >= DIST_BETWEEN_POINTS || std::abs(p.y - y_pos[current_index - 1]) >= DIST_BETWEEN_POINTS )
 		{
 		ROS_INFO("%d: (%f, %f, %f)", current_index, p.x, p.y, p.z);
 			scanTempArray[current_index] = *scan_msg;
@@ -160,7 +161,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	float sensor_range = 10.0f / MAP_RESOLUTION;
 
 	//Loop through all points in graph
-	for(int k = 0; k < 10; k++)
+	for(int k = 0; k < NUM_GRAPH_POINTS; k++)
 	{
 		ROS_INFO("Ray tracing for sensor %d", k);
 		sensor_msgs::LaserScan& scan = scanTempArray[k];
@@ -253,7 +254,7 @@ int main(int argc, char* argv[])
 	float sensor_range = 10.0f;
 	while(ros::ok())
 	{
-		if(current_index == 10)
+		if(current_index == NUM_GRAPH_POINTS)
 		{
 #if USE_FIRST
 			first_occupancy_gridmap_test(globalmap_pub, sensor_range);

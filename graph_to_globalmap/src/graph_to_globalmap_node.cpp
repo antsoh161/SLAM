@@ -7,16 +7,26 @@
 #include <cmath>
 #include <nav_msgs/OccupancyGrid.h>
 #include <tf/transform_datatypes.h>
-//#include <LinearMath/btMatrix3x3.h>
+#include <string>
+#include <sstream>
 
 #define USE_FIRST 0
 #define USE_RAY_TRACE 1
 #define USE_RAY_TRACE_LOG_ODDS 0
+
+//Map info
 #define MAP_WIDTH 1000
 #define MAP_HEIGHT 1000
 #define MAP_RESOLUTION 0.05f
+
+//Scan collection
 #define NUM_GRAPH_POINTS 10
-#define DIST_BETWEEN_POINTS 0.2f
+#define DIST_BETWEEN_POINTS 0.5f
+
+//Topics
+#define LASERSCAN_TOPIC "scan"
+#define ODOMETRY_TOPIC "odom"
+#define GLOBALMAP_TOPIC "globalmap"
 
 sensor_msgs::LaserScan scanTempArray[NUM_GRAPH_POINTS];
 float x_pos[NUM_GRAPH_POINTS];
@@ -139,7 +149,7 @@ void first_occupancy_gridmap_test(ros::Publisher& globalmap_pub, float sensor_ra
 }
 #elif USE_RAY_TRACE
 
-void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
+void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub, ros::Publisher local_maps[NUM_GRAPH_POINTS])
 {
 	//generate map
 	nav_msgs::OccupancyGrid globalmap_msg;
@@ -168,6 +178,15 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	//Loop through all points in graph
 	for(int k = 0; k < NUM_GRAPH_POINTS; k++)
 	{
+		nav_msgs::OccupancyGrid local_map;
+		local_map.info.width = MAP_WIDTH;
+		local_map.info.height = MAP_HEIGHT;
+		local_map.info.resolution = MAP_RESOLUTION;
+
+		//Resize the array to hold the map size. Set default value 50, for unknown
+		local_map.data.resize(MAP_WIDTH * MAP_HEIGHT, 50);
+
+
 		ROS_INFO("Ray tracing for sensor %d", k);
 		sensor_msgs::LaserScan& scan = scanTempArray[k];
 		float angle_range = (scan.angle_max - scan.angle_min);
@@ -180,8 +199,8 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
                 	float yDist = 0;
 
 			//@Todo: adjust with position of scan
-			int x_start = x0 + x_pos[k] / MAP_RESOLUTION;
-			int y_start = y0 + y_pos[k] / MAP_RESOLUTION;
+			int x_start = x0 - x_pos[k] / MAP_RESOLUTION;
+			int y_start = y0 - y_pos[k] / MAP_RESOLUTION;
 
 	                int xa = x_start;
 	                int ya = y_start;
@@ -207,7 +226,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 					else
 						globalmap_msg.data[index] += 1;
 					num_for_average.data[index] += 1;
-
+					local_map.data[index] = 100;
                                 	//this ray has reached it's destination, go to next ray.
 					break;
                         	}
@@ -217,6 +236,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 				else
 				num_for_average.data[index] += 1;
 
+				local_map.data[index] = 0;
 				xDist += dx;
                         	yDist += dy;
 
@@ -225,6 +245,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
                 	}
 
 	        }
+		local_maps[k].publish(local_map);
 	}
 
 	//compute average of sensor information for each cell
@@ -258,11 +279,22 @@ int main(int argc, char* argv[])
 	//ros::Subscriber sensor_sub = node_handle.subscribe("scan", 1, sensor_callback);
 	//ros::Subscriber odom_sub = node_handle.subscribe("odom", 1, odom_callback);
 
-	message_filters::Subscriber<sensor_msgs::LaserScan> sensor_sub(node_handle, "scan", 1);
-	message_filters::Subscriber<nav_msgs::Odometry> odom_sub(node_handle, "odom", 1);
+	message_filters::Subscriber<sensor_msgs::LaserScan> sensor_sub(node_handle, LASERSCAN_TOPIC, 1);
+	message_filters::Subscriber<nav_msgs::Odometry> odom_sub(node_handle, ODOMETRY_TOPIC, 1);
 
-	ros::Publisher globalmap_pub = node_handle.advertise<nav_msgs::OccupancyGrid>("globalmap", 1, true);
+	ros::Publisher globalmap_pub = node_handle.advertise<nav_msgs::OccupancyGrid>(GLOBALMAP_TOPIC, 1, true);
 
+	ros::Publisher local_maps[NUM_GRAPH_POINTS];
+	//local map publishers
+	for(int i = 0; i < NUM_GRAPH_POINTS; i++)
+	{
+		std::ostringstream ss;
+		ss << "localmap_";
+		ss << i;
+		std::string topic_name = ss.str();
+		ROS_INFO("TOPIC: %s", topic_name.c_str());
+		local_maps[i] = node_handle.advertise<nav_msgs::OccupancyGrid>(topic_name.c_str(), 1, true);
+	}
 
 	typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::LaserScan, nav_msgs::Odometry> mypolicy;
 	message_filters::Synchronizer<mypolicy> sync(mypolicy(10), sensor_sub, odom_sub);
@@ -276,7 +308,7 @@ int main(int argc, char* argv[])
 #if USE_FIRST
 			first_occupancy_gridmap_test(globalmap_pub, sensor_range);
 #elif USE_RAY_TRACE
-			ray_trace_occupancy_gridmap(globalmap_pub);
+			ray_trace_occupancy_gridmap(globalmap_pub, local_maps);
 #elif USE_RAY_TRACE_LOG_ODDS
 #endif
 			current_index++;

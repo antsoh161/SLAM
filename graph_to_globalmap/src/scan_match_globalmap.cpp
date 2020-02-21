@@ -6,6 +6,7 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <cmath>
 #include <nav_msgs/OccupancyGrid.h>
+#include <sensor_msgs/PointCloud2.h>
 #include <tf/transform_datatypes.h>
 #include <string>
 #include <sstream>
@@ -19,13 +20,14 @@
 
 //Scan collection
 #define NUM_GRAPH_POINTS 200
-#define DIST_BETWEEN_POINTS 0.1f
+#define DIST_BETWEEN_POINTS 0.05f
 
 //Macros
 #define SQUARED(x) x*x
 
 //Topics
 #define LASERSCAN_TOPIC "scan"
+#define POINTCLOUD_TOPIC "os1_cloud_node/points"
 #define ODOMETRY_TOPIC "odom"
 #define GLOBALMAP_TOPIC "globalmap"
 
@@ -38,6 +40,7 @@ typedef struct {
 
 //@Todo: This stores duplicate information data. We only need to store that information once. Then we should store only the actual sensor data for each node.
 sensor_msgs::LaserScan* sensor_data = new sensor_msgs::LaserScan[NUM_GRAPH_POINTS];
+sensor_msgs::PointCloud2* sensor3D_data = new sensor_msgs::PointCloud2[NUM_GRAPH_POINTS];
 Position* relative_positions = new Position[NUM_GRAPH_POINTS];
 
 int scan_index = 0;
@@ -55,13 +58,31 @@ float getYaw(const geometry_msgs::Quaternion quat)
 	return (float)yaw;
 }
 
-void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const nav_msgs::Odometry::ConstPtr& odom_msg)
+const Position scanMatchICP(const sensor_msgs::PointCloud2& prev_scan, float prev_yaw, const sensor_msgs::PointCloud2& new_scan, float dx, float dy, float new_yaw)
+{
+	//@Todo: implement ICP here
+
+	//1) find the closest point in prev_scan for each point in new_scan, (offset new scan by dx and dy)
+
+	//2) minimize the distance error between each point.
+
+	//return new yaw and dx, dy
+	Position pos;
+	pos.dx = dx;
+	pos.dy = dy;
+	pos.yaw = new_yaw;
+	return pos;
+}
+
+
+void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const sensor_msgs::PointCloud2::ConstPtr& scan3D_msg, const nav_msgs::Odometry::ConstPtr& odom_msg)
 {
 	if(scan_index >= NUM_GRAPH_POINTS)return;
 
 
 	static float prev_x = 0;
 	static float prev_y = 0;
+	static float prev_yaw = 0;
 
 	geometry_msgs::Point p = odom_msg->pose.pose.position;
 
@@ -82,12 +103,23 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const na
 		prev_y = p.y;
 
 		//Store relative position
-		relative_positions[scan_index].dx = dx;
-		relative_positions[scan_index].dy = dy;
-		relative_positions[scan_index].yaw = getYaw(odom_msg->pose.pose.orientation);
+		if(scan_index == 0)
+		{
+			relative_positions[scan_index].dx = dx;
+			relative_positions[scan_index].dy = dy;
+			relative_positions[scan_index].yaw = getYaw(odom_msg->pose.pose.orientation);
+		}
+		else 
+		{
+			relative_positions[scan_index] = scanMatchICP(sensor3D_data[scan_index], prev_yaw, *scan3D_msg, dx, dy, getYaw(odom_msg->pose.pose.orientation));
+		}
+
+		//Store previous orientation
+		prev_yaw = relative_positions[scan_index].yaw;
 
 		//Store laser scan
 		sensor_data[scan_index] = *scan_msg;
+		sensor3D_data[scan_index] = *scan3D_msg;
 
 		scan_index++;
 	}
@@ -250,6 +282,7 @@ int main(int argc, char* argv[])
 	ros::NodeHandle node_handle;
 
 	message_filters::Subscriber<sensor_msgs::LaserScan> sensor_sub(node_handle, LASERSCAN_TOPIC, 1);
+	message_filters::Subscriber<sensor_msgs::PointCloud2> sensor3D_sub(node_handle, POINTCLOUD_TOPIC, 1);
 	message_filters::Subscriber<nav_msgs::Odometry> odom_sub(node_handle, ODOMETRY_TOPIC, 1);
 
 	ros::Publisher globalmap_pub = node_handle.advertise<nav_msgs::OccupancyGrid>(GLOBALMAP_TOPIC, 1, true);
@@ -268,10 +301,10 @@ int main(int argc, char* argv[])
 	}
 #endif
 
-	typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::LaserScan, nav_msgs::Odometry> mypolicy;
-	message_filters::Synchronizer<mypolicy> sync(mypolicy(10), sensor_sub, odom_sub);
+	typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::LaserScan, sensor_msgs::PointCloud2, nav_msgs::Odometry> mypolicy;
+	message_filters::Synchronizer<mypolicy> sync(mypolicy(10), sensor_sub, sensor3D_sub, odom_sub);
 
-	sync.registerCallback(boost::bind(&scanOdomCallback, _1, _2));
+	sync.registerCallback(boost::bind(&scanOdomCallback, _1, _2, _3));
 	float sensor_range = 10.0f;
 	while(ros::ok())
 	{
@@ -289,6 +322,7 @@ int main(int argc, char* argv[])
 	}
 
 	delete[] sensor_data;
+	delete[] sensor3D_data;
 	delete[] relative_positions;
 
 	return 0;

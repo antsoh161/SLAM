@@ -28,8 +28,8 @@
 #define MAP_RESOLUTION 0.05f
 
 //Scan collection
-#define NUM_GRAPH_POINTS 200
-#define DIST_BETWEEN_POINTS 0.1f
+#define NUM_GRAPH_POINTS 100
+#define DIST_BETWEEN_POINTS 0.05f
 
 //Topics
 #define LASERSCAN_TOPIC "scan"
@@ -173,7 +173,7 @@ void ray_trace_occupancy_gridmap(ros::Publisher& gridmap_pub)
 	globalmap_msg.data.resize(MAP_WIDTH * MAP_HEIGHT, 50);
 
 
-	//@Todo:don't use this. --  Not optimízing, don't use this for final code. 
+	//@Todo:don't use this. --  Not optimízing, don't use this for final code.
 	nav_msgs::OccupancyGrid num_for_average;
 	num_for_average.data.resize(MAP_WIDTH * MAP_HEIGHT, 0);
 

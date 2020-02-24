@@ -13,14 +13,12 @@
 #define ODOM_TOPIC "odom"
 
 
-void laserscan_callback(const nav_msgs::Odometry::ConstPtr& msg)
+void laserscan_callback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
-  ROS_INFO("glhjjlhbj\n");
-
   tf::TransformListener odom_listener;
   tf::StampedTransform transform;
   try{
-        odom_listener.lookupTransform("/odom1", "/odom2",
+        odom_listener.lookupTransform("/odom", "/base_link",
                                 ros::Time(0), transform);
   }
   catch (tf::TransformException &ex) {
@@ -30,7 +28,6 @@ void laserscan_callback(const nav_msgs::Odometry::ConstPtr& msg)
 
   // ROS_INFO("Seq: [%d]", msg->header.seq);
   ROS_INFO("Position-> y: [%f]", transform.getOrigin().y());
-  ROS_INFO("AAAAAA\n");
 
   // ROS_INFO("Orientation-> x: [%f], y: [%f], z: [%f], w: [%f]", msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
 }
@@ -43,9 +40,9 @@ int main(int argc, char **argv)
   ROS_INFO("SFHAKHs\n");
 
 
+	ros::Subscriber laserscan_subscriber = nh.subscribe(LASERSCAN_TOPIC, 1, laserscan_callback);
   while (ros::ok())
   {
-	ros::Subscriber laserscan_subscriber = nh.subscribe(LASERSCAN_TOPIC, 1, laserscan_callback);
     ros::spinOnce();
   }
 

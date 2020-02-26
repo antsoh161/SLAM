@@ -7,6 +7,7 @@
 #include <cmath>
 #include <nav_msgs/OccupancyGrid.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
 #include <tf/transform_datatypes.h>
 #include <string>
 #include <sstream>
@@ -96,9 +97,49 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 	//@Note: This won't save the first position. It will start saving from a distance NUM_GRAPH_POINTS away from (0,0)
 	if(distance_squared >= SQUARED(DIST_BETWEEN_POINTS))
 	{
-		ROS_INFO("%d | odometry (%f, %f) | relative position (%f, %f)", scan_index, p.x, p.y, dx, dy);
+		//ROS_INFO("%d | odometry (%f, %f) | relative position (%f, %f)", scan_index, p.x, p.y, dx, dy);
+		//ROS_INFO("height %d | width %d | point_bytes %d | row_bytes %d | row %d", scan3D_msg->height, scan3D_msg->width, scan3D_msg->point_step, scan3D_msg->row_step, scan3D_msg->row_step/scan3D_msg->point_step);
 
-		//Save position to compute relative distance for next scan
+		sensor_msgs::PointCloud2 new_cloud = *scan3D_msg;
+		static int temp_once = 0;
+		if (temp_once++ == 0)
+		{
+			int counter = 0;
+			for(sensor_msgs::PointCloud2Iterator<float> iter_x(new_cloud, "x"), iter_y(new_cloud, "y"), iter_z(new_cloud, "z"); iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
+			{
+				if(counter++ % 4 != 0)continue;
+				if (std::isnan(iter_x[0]) || std::isnan(iter_y[0]) || std::isnan(iter_z[0]))
+    				{
+      					ROS_INFO("rejected for nan in point(%f, %f, %f)\n", iter_x[0], iter_y[0], iter_z[0]);
+      					continue;
+   				}
+				//if(counter % scan3D_msg->row_step / scan3D_msg->point_step == 0)
+					ROS_INFO("%d: (%f, %f, %f)", counter, iter_x[0], iter_y[0], iter_z[0]);
+				if(counter >= scan3D_msg->row_step / scan3D_msg->point_step)break;
+			}
+			/*
+			ROS_INFO("int_byte_size %d", sizeof(int));
+			ROS_INFO("iterate: %d", scan3D_msg->point_step/sizeof(int));
+			for(int i = 0; i < scan3D_msg->point_step; i++)
+			{
+				if(i%4 == 0)
+					value = 0;
+				if(scan3D_msg->is_bigendian)
+				{
+					//value |= scan3D_msg->data[i] << (24 - (i%4)*8);
+					((char*)&value)[3 - i%4] = scan3D_msg->data[i];
+				}else
+				{
+					//value |= scan3D_msg->data[i] << (i%4)*8;
+					((char*)&value)[i%4] = scan3D_msg->data[i];
+				}
+				if(i%4 == 3)
+					ROS_INFO("%d - %d: value %f", temp2, i, value);
+			}
+			*/
+
+		}
+//Save position to compute relative distance for next scan
 		prev_x = p.x;
 		prev_y = p.y;
 
@@ -109,7 +150,7 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 			relative_positions[scan_index].dy = dy;
 			relative_positions[scan_index].yaw = getYaw(odom_msg->pose.pose.orientation);
 		}
-		else 
+		else
 		{
 			relative_positions[scan_index] = scanMatchICP(sensor3D_data[scan_index], prev_yaw, *scan3D_msg, dx, dy, getYaw(odom_msg->pose.pose.orientation));
 		}

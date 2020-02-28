@@ -11,6 +11,8 @@
 #include <tf/transform_datatypes.h>
 #include <string>
 #include <sstream>
+#include <memory>
+
 
 #define PUBLISH_LOCAL_MAPS 0
 
@@ -59,9 +61,52 @@ float getYaw(const geometry_msgs::Quaternion quat)
 	return (float)yaw;
 }
 
-const Position scanMatchICP(const sensor_msgs::PointCloud2& prev_scan, float prev_yaw, const sensor_msgs::PointCloud2& new_scan, float dx, float dy, float new_yaw)
+//const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw, const sensor_msgs::PointCloud2::ConstPtr new_scan, float dx, float dy, float new_yaw)
+const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw, sensor_msgs::PointCloud2& new_scan, float dx, float dy, float new_yaw)
 {
 	//@Todo: implement ICP here
+
+	// Get center of mass
+
+	float u_x[3] = {0,0,0};
+	float u_p[3] = {0,0,0};
+	int iterations_mean = 0;
+
+	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
+	{
+		u_x[0] += iter_x[0];
+		u_x[1] += iter_x[1];
+		u_x[2] += iter_x[2];
+
+		u_p[0] += iter_p[0];
+		u_p[1] += iter_p[1];
+		u_p[2] += iter_p[2];
+
+		iterations_mean++;
+	}
+
+	if(iterations_mean != 0)
+	{
+		u_x[0] /= (float)iterations_mean;
+		u_x[1] /= (float)iterations_mean;
+		u_x[2] /= (float)iterations_mean;
+
+		u_p[0] /= (float)iterations_mean;
+		u_p[1] /= (float)iterations_mean;
+		u_p[2] /= (float)iterations_mean;
+	}
+	//ROS_INFO("u_x mean: (%.3f, %.3f, %.3f)", u_x[0], u_x[1], u_x[2]);
+	//ROS_INFO("u_p mean: (%.3f, %.3f, %.3f)", u_p[0], u_p[1], u_p[2]);
+
+	// Shift by center of mass
+
+	
+
+	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
+	{
+		
+	}
+
 
 	//1) find the closest point in prev_scan for each point in new_scan, (offset new scan by dx and dy)
 
@@ -104,7 +149,9 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 		static int temp_once = 0;
 		if (temp_once++ == 0)
 		{
+			int zero_counter = 0;
 			int counter = 0;
+			/*
 			for(sensor_msgs::PointCloud2Iterator<float> iter_x(new_cloud, "x"), iter_y(new_cloud, "y"), iter_z(new_cloud, "z"); iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
 			{
 				if(counter++ % 4 != 0)continue;
@@ -113,10 +160,14 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
       					ROS_INFO("rejected for nan in point(%f, %f, %f)\n", iter_x[0], iter_y[0], iter_z[0]);
       					continue;
    				}
+
+				if(iter_x[0] == 0 && iter_y[0] == 0 && iter_z[0] == 0) zero_counter++;
 				//if(counter % scan3D_msg->row_step / scan3D_msg->point_step == 0)
-					ROS_INFO("%d: (%f, %f, %f)", counter, iter_x[0], iter_y[0], iter_z[0]);
+					//ROS_INFO("%d: (%f, %f, %f)", counter, iter_x[0], iter_y[0], iter_z[0]);
 				if(counter >= scan3D_msg->row_step / scan3D_msg->point_step)break;
 			}
+			*/
+			ROS_INFO("zero_counter %d", zero_counter);
 			/*
 			ROS_INFO("int_byte_size %d", sizeof(int));
 			ROS_INFO("iterate: %d", scan3D_msg->point_step/sizeof(int));
@@ -143,6 +194,11 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 		prev_x = p.x;
 		prev_y = p.y;
 
+		//Store laser scan
+		sensor_data[scan_index] = *scan_msg;
+		sensor3D_data[scan_index] = *scan3D_msg;
+
+
 		//Store relative position
 		if(scan_index == 0)
 		{
@@ -152,15 +208,12 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 		}
 		else
 		{
-			relative_positions[scan_index] = scanMatchICP(sensor3D_data[scan_index], prev_yaw, *scan3D_msg, dx, dy, getYaw(odom_msg->pose.pose.orientation));
+			relative_positions[scan_index] = scanMatchICP(sensor3D_data[scan_index-1], prev_yaw, sensor3D_data[scan_index], dx, dy, getYaw(odom_msg->pose.pose.orientation));
+//			relative_positions[scan_index] = scanMatchICP(boost::make_shared<sensor_msgs::PointCloud2 const>(sensor3D_data[scan_index-1]), prev_yaw, scan3D_msg, dx, dy, getYaw(odom_msg->pose.pose.orientation));
 		}
 
 		//Store previous orientation
 		prev_yaw = relative_positions[scan_index].yaw;
-
-		//Store laser scan
-		sensor_data[scan_index] = *scan_msg;
-		sensor3D_data[scan_index] = *scan3D_msg;
 
 		scan_index++;
 	}

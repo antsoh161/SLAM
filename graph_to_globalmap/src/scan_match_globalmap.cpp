@@ -12,7 +12,7 @@
 #include <string>
 #include <sstream>
 #include <memory>
-
+#include <eigen3/Eigen/Dense>
 
 #define PUBLISH_LOCAL_MAPS 0
 
@@ -70,7 +70,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 
 	float u_x[3] = {0,0,0};
 	float u_p[3] = {0,0,0};
-	int iterations_mean = 0;
+	int num_rays = 0;
 
 	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
 	{
@@ -82,31 +82,32 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		u_p[1] += iter_p[1];
 		u_p[2] += iter_p[2];
 
-		iterations_mean++;
+		num_rays++;
 	}
 
-	if(iterations_mean != 0)
+	if(num_rays != 0)
 	{
-		u_x[0] /= (float)iterations_mean;
-		u_x[1] /= (float)iterations_mean;
-		u_x[2] /= (float)iterations_mean;
+		u_x[0] /= (float)num_rays;
+		u_x[1] /= (float)num_rays;
+		u_x[2] /= (float)num_rays;
 
-		u_p[0] /= (float)iterations_mean;
-		u_p[1] /= (float)iterations_mean;
-		u_p[2] /= (float)iterations_mean;
+		u_p[0] /= (float)num_rays;
+		u_p[1] /= (float)num_rays;
+		u_p[2] /= (float)num_rays;
 	}
 	//ROS_INFO("u_x mean: (%.3f, %.3f, %.3f)", u_x[0], u_x[1], u_x[2]);
 	//ROS_INFO("u_p mean: (%.3f, %.3f, %.3f)", u_p[0], u_p[1], u_p[2]);
 
 	// Shift by center of mass
 
-	
-
+	float W = 0.0f;
 	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
 	{
-		
+		//w += x*x + y*y + z*z
+		W += (iter_x[0] - u_x[0]) * (iter_p[0] - u_p[0]); //x * x
+		W += (iter_x[1] - u_x[1]) * (iter_p[1] - u_p[1]); //y * y
+		W += (iter_x[2] - u_x[2]) * (iter_p[2] - u_p[2]); //z * z
 	}
-
 
 	//1) find the closest point in prev_scan for each point in new_scan, (offset new scan by dx and dy)
 
@@ -124,7 +125,6 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const sensor_msgs::PointCloud2::ConstPtr& scan3D_msg, const nav_msgs::Odometry::ConstPtr& odom_msg)
 {
 	if(scan_index >= NUM_GRAPH_POINTS)return;
-
 
 	static float prev_x = 0;
 	static float prev_y = 0;
@@ -156,10 +156,10 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 			{
 				if(counter++ % 4 != 0)continue;
 				if (std::isnan(iter_x[0]) || std::isnan(iter_y[0]) || std::isnan(iter_z[0]))
-    				{
-      					ROS_INFO("rejected for nan in point(%f, %f, %f)\n", iter_x[0], iter_y[0], iter_z[0]);
-      					continue;
-   				}
+				{
+					ROS_INFO("rejected for nan in point(%f, %f, %f)\n", iter_x[0], iter_y[0], iter_z[0]);
+					continue;
+				}
 
 				if(iter_x[0] == 0 && iter_y[0] == 0 && iter_z[0] == 0) zero_counter++;
 				//if(counter % scan3D_msg->row_step / scan3D_msg->point_step == 0)
@@ -188,7 +188,6 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 					ROS_INFO("%d - %d: value %f", temp2, i, value);
 			}
 			*/
-
 		}
 //Save position to compute relative distance for next scan
 		prev_x = p.x;
@@ -197,7 +196,6 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 		//Store laser scan
 		sensor_data[scan_index] = *scan_msg;
 		sensor3D_data[scan_index] = *scan3D_msg;
-
 
 		//Store relative position
 		if(scan_index == 0)
@@ -209,9 +207,8 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 		else
 		{
 			relative_positions[scan_index] = scanMatchICP(sensor3D_data[scan_index-1], prev_yaw, sensor3D_data[scan_index], dx, dy, getYaw(odom_msg->pose.pose.orientation));
-//			relative_positions[scan_index] = scanMatchICP(boost::make_shared<sensor_msgs::PointCloud2 const>(sensor3D_data[scan_index-1]), prev_yaw, scan3D_msg, dx, dy, getYaw(odom_msg->pose.pose.orientation));
+			//relative_positions[scan_index] = scanMatchICP(boost::make_shared<sensor_msgs::PointCloud2 const>(sensor3D_data[scan_index-1]), prev_yaw, scan3D_msg, dx, dy, getYaw(odom_msg->pose.pose.orientation));
 		}
-
 		//Store previous orientation
 		prev_yaw = relative_positions[scan_index].yaw;
 
@@ -234,11 +231,9 @@ void rayTraceGlobalMap(ros::Publisher& gridmap_pub)
 	//Resize the array to hold the map size. Set default value 50, for unknown
 	globalmap_msg.data.resize(MAP_WIDTH * MAP_HEIGHT, 50);
 
-
 	//@Todo:don't use this. --  Not optimízing, don't use this for final code.
 	nav_msgs::OccupancyGrid num_for_average;
 	num_for_average.data.resize(MAP_WIDTH * MAP_HEIGHT, 0);
-
 
 	//Start at center of map
 	int x0 = MAP_WIDTH / 2;
@@ -250,7 +245,6 @@ void rayTraceGlobalMap(ros::Publisher& gridmap_pub)
 
 	//For debugging only use obstacle iformation within 10m radius.
 	float sensor_range = 10.0f / MAP_RESOLUTION;
-
 
 	//Loop through each scan
 	for(int current_scan = 0; current_scan < NUM_GRAPH_POINTS; current_scan++)
@@ -271,7 +265,6 @@ void rayTraceGlobalMap(ros::Publisher& gridmap_pub)
 		float angle_range = (scan.angle_max - scan.angle_min);
 		int num_angles = (angle_range)/scan.angle_increment;
 
-
 		Position relative_pos = relative_positions[current_scan];
 
 		//Move from previous position to current position by adding the relative position.
@@ -283,34 +276,34 @@ void rayTraceGlobalMap(ros::Publisher& gridmap_pub)
 
 		//Ray trace for current sensor
 		for(int i = 0; i < num_angles; i++)
-	        {
-        	        float xDist = 0;
-                	float yDist = 0;
+		{
+			float xDist = 0;
+				float yDist = 0;
 
-	                int xa = x_start;
-	                int ya = y_start;
+			int xa = x_start;
+			int ya = y_start;
 
 			//Take into account the current rotation of the robot
-	                float angle = robot_angle + i * scan.angle_increment;
+			float angle = robot_angle + i * scan.angle_increment;
 			float dy = sin(angle);
-                	float dx = cos(angle);
+			float dx = cos(angle);
 
-                	float dist_to_obstacle = scan.ranges[i]/MAP_RESOLUTION;
+			float dist_to_obstacle = scan.ranges[i]/MAP_RESOLUTION;
 
 			//Go step by step along ray, but make sure to be in bounds of the gridmap
-	                while(xa >= 0 && xa < MAP_WIDTH && ya >= 0 && ya < MAP_HEIGHT)
-        	        {
+			while(xa >= 0 && xa < MAP_WIDTH && ya >= 0 && ya < MAP_HEIGHT)
+			{
 				int index = xa + ya * globalmap_msg.info.width;
-                        	float dist_travled = std::sqrt(xDist*xDist + yDist*yDist);
+				float dist_travled = std::sqrt(xDist*xDist + yDist*yDist);
 
 				if(dist_travled >= sensor_range)break;
 
 				//Check if has reached the obstacle
-                       		if(floor(dist_travled) >= floor(dist_to_obstacle))
-                        	{
-                                	if(num_for_average.data[index] == 0)
-						//Overwrite if first time cell has been reached
-						globalmap_msg.data[index] = 1;
+				if(floor(dist_travled) >= floor(dist_to_obstacle))
+				{
+					if(num_for_average.data[index] == 0)
+					//Overwrite if first time cell has been reached
+					globalmap_msg.data[index] = 1;
 					else
 						globalmap_msg.data[index] += 1;
 					num_for_average.data[index] += 1;
@@ -319,16 +312,16 @@ void rayTraceGlobalMap(ros::Publisher& gridmap_pub)
 					local_map.data[index] = 100;
 					#endif
 
-                                	//this ray has reached it's destination, go to next ray.
+					//this ray has reached it's destination, go to next ray.
 					break;
-                        	}
+				}
 
 
 				if(num_for_average.data[index] == 0)
 					//Overwrite value with 0 only if it was the first time cell had been reached
 					globalmap_msg.data[index] = 0;
 				else
-				num_for_average.data[index] += 1;
+					num_for_average.data[index] += 1;
 
 				#if PUBLISH_LOCAL_MAPS
 				local_map.data[index] = 0;
@@ -337,13 +330,13 @@ void rayTraceGlobalMap(ros::Publisher& gridmap_pub)
 
 				//update travel distance
 				xDist += dx;
-                        	yDist += dy;
+				yDist += dy;
 
-                        	xa = x_start + xDist;
-                        	ya = y_start + yDist;
-                	}
+				xa = x_start + xDist;
+				ya = y_start + yDist;
+			}
 
-	        }
+		}
 		#if PUBLISH_LOCAL_MAPS
 		local_maps[k].publish(local_map);
 		#endif

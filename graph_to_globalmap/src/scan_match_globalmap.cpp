@@ -13,6 +13,21 @@
 #include <sstream>
 #include <memory>
 #include <eigen3/Eigen/Dense>
+#include <eigen3/Eigen/SVD>
+
+#include <pcl/io/pcd_io.h>
+#include <pcl/io/ply_io.h>
+#include <pcl/point_cloud.h>
+#include <pcl/console/parse.h>
+#include <pcl/common/transforms.h>
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_types.h>
+#include <pcl/PCLPointCloud2.h>
+#include <pcl/conversions.h>
+#include <pcl_ros/transforms.h>
+
+typedef Eigen::MatrixXf MAT;
 
 #define PUBLISH_LOCAL_MAPS 0
 
@@ -22,7 +37,7 @@
 #define MAP_RESOLUTION 0.05f
 
 //Scan collection
-#define NUM_GRAPH_POINTS 200
+#define NUM_GRAPH_POINTS 10
 #define DIST_BETWEEN_POINTS 0.05f
 
 //Macros
@@ -67,51 +82,80 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	//@Todo: implement ICP here
 
 	// Get center of mass
-
-	float u_x[3] = {0,0,0};
-	float u_p[3] = {0,0,0};
+	MAT u_x(3, 1); u_x << 0,0,0;
+	MAT u_p(3, 1); u_p << 0,0,0;
 	int num_rays = 0;
 
 	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
 	{
-		u_x[0] += iter_x[0];
-		u_x[1] += iter_x[1];
-		u_x[2] += iter_x[2];
-
-		u_p[0] += iter_p[0];
-		u_p[1] += iter_p[1];
-		u_p[2] += iter_p[2];
+		MAT x(3, 1); x << iter_x[0], iter_x[1], iter_x[2];
+		MAT p(3, 1); p << iter_p[0], iter_p[1], iter_p[2];
+		u_x += x;
+		u_p += p;
 
 		num_rays++;
 	}
 
 	if(num_rays != 0)
 	{
-		u_x[0] /= (float)num_rays;
-		u_x[1] /= (float)num_rays;
-		u_x[2] /= (float)num_rays;
-
-		u_p[0] /= (float)num_rays;
-		u_p[1] /= (float)num_rays;
-		u_p[2] /= (float)num_rays;
+		u_x /= (float)num_rays;
+		u_p /= (float)num_rays;
 	}
 	//ROS_INFO("u_x mean: (%.3f, %.3f, %.3f)", u_x[0], u_x[1], u_x[2]);
 	//ROS_INFO("u_p mean: (%.3f, %.3f, %.3f)", u_p[0], u_p[1], u_p[2]);
 
-	// Shift by center of mass
-
-	float W = 0.0f;
-	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
-	{
-		//w += x*x + y*y + z*z
-		W += (iter_x[0] - u_x[0]) * (iter_p[0] - u_p[0]); //x * x
-		W += (iter_x[1] - u_x[1]) * (iter_p[1] - u_p[1]); //y * y
-		W += (iter_x[2] - u_x[2]) * (iter_p[2] - u_p[2]); //z * z
-	}
 
 	//1) find the closest point in prev_scan for each point in new_scan, (offset new scan by dx and dy)
 
+	// Shift by center of mass
 	//2) minimize the distance error between each point.
+	MAT W(3, 3); W <<	0, 0, 0,	0, 0, 0,	0, 0, 0;
+	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
+	{
+		MAT xp(3, 1); xp << iter_x[0], iter_x[1], iter_x[2];
+		MAT pp(3, 1); pp << iter_p[0], iter_p[1], iter_p[2];
+	
+		xp -= u_x;
+		pp -= u_p;
+
+		MAT Wn(3, 3); Wn = xp * pp.transpose();
+		W += Wn;
+	}
+	Eigen::JacobiSVD<MAT> svd(W, Eigen::ComputeThinU | Eigen::ComputeThinV);
+
+#if 0	//DEBUG SVD OUTPUT
+	std::cout << "W: " << W << "\n";
+	
+	std::cout << "Its singular values are:\n" << svd.singularValues() << "\n";
+	std::cout << "Its left singular vectors are the columns of the thin U matrix:\n" << svd.matrixU() << "\n";
+	std::cout << "Its right singular vectors are the columns of the thin V matrix:\n" << svd.matrixV() << "\n";
+#endif	
+
+	MAT R(3,3);
+	R = svd.matrixU() * svd.matrixV().transpose();
+	MAT t(3, 1);
+	t = u_x - R*u_p;
+
+	Eigen::Matrix4f Trans; // Your Transformation Matrix
+	Trans.setIdentity();   // Set to Identity to make bottom row of Matrix 0,0,0,1
+	Trans.block<3,3>(0,0) = R;
+	Trans.block<3,1>(0,3) = t;
+
+	  // Executing the transformation
+
+	  
+	pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
+	// You can either apply transform_1 or transform_2; they are the same
+
+	pcl::PCLPointCloud2 pcl_pc2;
+    pcl_conversions::toPCL(new_scan, pcl_pc2);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::fromPCLPointCloud2(pcl_pc2, *temp_cloud);
+	pcl::transformPointCloud (*temp_cloud, *transformed_cloud, Trans);
+	
+	ROS_INFO("Apply transformation");
+
+	
 
 	//return new yaw and dx, dy
 	Position pos;

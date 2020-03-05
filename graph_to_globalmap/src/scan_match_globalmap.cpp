@@ -110,10 +110,12 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	// Shift by center of mass
 	//2) minimize the distance error between each point.
 	MAT W(3, 3); W <<	0, 0, 0,	0, 0, 0,	0, 0, 0;
+	MAT xp(3, 1);
+	MAT pp(3, 1);
 	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
 	{
-		MAT xp(3, 1); xp << iter_x[0], iter_x[1], iter_x[2];
-		MAT pp(3, 1); pp << iter_p[0], iter_p[1], iter_p[2];
+		xp << iter_x[0], iter_x[1], iter_x[2];
+		pp << iter_p[0], iter_p[1], iter_p[2];
 	
 		xp -= u_x;
 		pp -= u_p;
@@ -136,26 +138,71 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	MAT t(3, 1);
 	t = u_x - R*u_p;
 
-	Eigen::Matrix4f Trans; // Your Transformation Matrix
-	Trans.setIdentity();   // Set to Identity to make bottom row of Matrix 0,0,0,1
+	Eigen::Matrix4f Trans;	// Your Transformation Matrix
+	Trans.setIdentity();	// Set to Identity to make bottom row of Matrix 0,0,0,1
 	Trans.block<3,3>(0,0) = R;
 	Trans.block<3,1>(0,3) = t;
 
-	  // Executing the transformation
+	// Executing the transformation
 
-	  
+	// Minimize the sum of squared error for (R,t)
+	float E_Rt = 0.0f;
+
+	// For the CORRET function
+	MAT _iter_p(3,1);
+	MAT Rp(3,1);
+
+/*
+	// For the WRONG function
+	MAT S(3,1);
+	S = svd.singularValues();
+*/
+	
+	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
+	{
+		// This is the CORRECT function I think
+		// E(R,t) = SUM(||iter_x - R*iter_p - t||²)/num_rays
+		_iter_p << iter_p[0], iter_p[1], iter_p[2];
+		Rp = R*_iter_p;
+		float temp = pow(sqrt(pow((iter_x[0]- Rp(0,0) - t(0,0)) + (iter_x[1] - Rp(1,0) - t(1,0)) + (iter_x[2] - Rp(2,0) - t(2,0)), 2)), 2)/num_rays;
+
+
+	/*
+		// This is the WRONG function I think
+		// E(R,t) = SUM(||xp||² + ||pp||²) - 2*SUM(singularValues)
+		xp << iter_x[0], iter_x[1], iter_x[2];
+		pp << iter_p[0], iter_p[1], iter_p[2];
+	
+		xp -= u_x;
+		pp -= u_p;
+	//				 (								||xp||							)² + (								||pp||							)²
+		float temp = pow(sqrt(pow(xp(0,0), 2) + pow(xp(1,0), 2) + pow(xp(2,0), 2)), 2) + pow(sqrt(pow(pp(0,0), 2) + pow(pp(1,0), 2) + pow(pp(2,0), 2)), 2);
+	*/
+
+
+		E_Rt += temp;
+	}
+/*
+	// For the WRONG function
+	E_Rt -= 2 * (S(0,0) + S(1,0) + S(2,0));	// I *think* this is not needed
+*/
+	ROS_INFO("Minimized sum of square error: %f", E_Rt);
+
+
+
+	
 	pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
 	// You can either apply transform_1 or transform_2; they are the same
 
 	pcl::PCLPointCloud2 pcl_pc2;
-    pcl_conversions::toPCL(new_scan, pcl_pc2);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::fromPCLPointCloud2(pcl_pc2, *temp_cloud);
+	pcl_conversions::toPCL(new_scan, pcl_pc2);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::fromPCLPointCloud2(pcl_pc2, *temp_cloud);
 	pcl::transformPointCloud (*temp_cloud, *transformed_cloud, Trans);
 	
 	ROS_INFO("Apply transformation");
 
-	
+
 
 	//return new yaw and dx, dy
 	Position pos;

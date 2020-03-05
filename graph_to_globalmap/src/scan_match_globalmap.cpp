@@ -147,28 +147,25 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 
 	// Minimize the sum of squared error for (R,t)
 	float E_Rt = 0.0f;
-
-	// For the CORRET function
-	MAT _iter_p(3,1);
-	MAT Rp(3,1);
+	MAT _iter_p(3,1);	// Save iter_p[0-2] as a matrix-vector
+	MAT Rp(3,1);		// Used to rotate iter_p in the function
 
 /*
-	// For the WRONG function
+	// vvv REMOVE vvv
 	MAT S(3,1);
 	S = svd.singularValues();
+	// ^^^ REMOVE ^^^
 */
 	
 	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
 	{
-		// This is the CORRECT function I think
 		// E(R,t) = SUM(||iter_x - R*iter_p - t||²)/num_rays
 		_iter_p << iter_p[0], iter_p[1], iter_p[2];
 		Rp = R*_iter_p;
 		float temp = pow(sqrt(pow((iter_x[0]- Rp(0,0) - t(0,0)) + (iter_x[1] - Rp(1,0) - t(1,0)) + (iter_x[2] - Rp(2,0) - t(2,0)), 2)), 2)/num_rays;
 
-
 	/*
-		// This is the WRONG function I think
+		// vvvvvvvvvvvvvvvv REMOVE vvvvvvvvvvvvvvvv
 		// E(R,t) = SUM(||xp||² + ||pp||²) - 2*SUM(singularValues)
 		xp << iter_x[0], iter_x[1], iter_x[2];
 		pp << iter_p[0], iter_p[1], iter_p[2];
@@ -177,14 +174,15 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		pp -= u_p;
 	//				 (								||xp||							)² + (								||pp||							)²
 		float temp = pow(sqrt(pow(xp(0,0), 2) + pow(xp(1,0), 2) + pow(xp(2,0), 2)), 2) + pow(sqrt(pow(pp(0,0), 2) + pow(pp(1,0), 2) + pow(pp(2,0), 2)), 2);
+		// ^^^^^^^^^^^^^^^^ REMOVE ^^^^^^^^^^^^^^^^
 	*/
-
 
 		E_Rt += temp;
 	}
 /*
-	// For the WRONG function
+	// vvvvvvvvvv REMOVE vvvvvvvvvv
 	E_Rt -= 2 * (S(0,0) + S(1,0) + S(2,0));	// I *think* this is not needed
+	// ^^^^^^^^^^ REMOVE ^^^^^^^^^^
 */
 	ROS_INFO("Minimized sum of square error: %f", E_Rt);
 

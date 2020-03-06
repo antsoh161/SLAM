@@ -26,6 +26,7 @@
 #include <pcl/PCLPointCloud2.h>
 #include <pcl/conversions.h>
 #include <pcl_ros/transforms.h>
+#include <pcl/kdtree/kdtree_flann.h>
 
 typedef Eigen::MatrixXf MAT;
 
@@ -76,130 +77,133 @@ float getYaw(const geometry_msgs::Quaternion quat)
 	return (float)yaw;
 }
 
-//const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw, const sensor_msgs::PointCloud2::ConstPtr new_scan, float dx, float dy, float new_yaw)
 const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw, sensor_msgs::PointCloud2& new_scan, float dx, float dy, float new_yaw)
 {
-	//@Todo: implement ICP here
 
-	// Get center of mass
-	MAT u_x(3, 1); u_x << 0,0,0;
-	MAT u_p(3, 1); u_p << 0,0,0;
-	int num_rays = 0;
-
-	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
+	//Convert to pcl point cloud
+	pcl::PointCloud<pcl::PointXYZ>::Ptr prev_scan_pcl(new pcl::PointCloud<pcl::PointXYZ> ());
+	pcl::PointCloud<pcl::PointXYZ>::Ptr new_scan_pcl (new pcl::PointCloud<pcl::PointXYZ> ());
+	
 	{
-		MAT x(3, 1); x << iter_x[0], iter_x[1], iter_x[2];
-		MAT p(3, 1); p << iter_p[0], iter_p[1], iter_p[2];
-		u_x += x;
-		u_p += p;
-
-		num_rays++;
+		pcl::PCLPointCloud2 temp_cloud;
+		pcl_conversions::toPCL(prev_scan, temp_cloud);
+		pcl::fromPCLPointCloud2(temp_cloud, *prev_scan_pcl);
 	}
 
-	if(num_rays != 0)
 	{
-		u_x /= (float)num_rays;
-		u_p /= (float)num_rays;
+		pcl::PCLPointCloud2 temp_cloud;
+		pcl_conversions::toPCL(new_scan, temp_cloud);
+		pcl::fromPCLPointCloud2(temp_cloud, *new_scan_pcl);
 	}
-	//ROS_INFO("u_x mean: (%.3f, %.3f, %.3f)", u_x[0], u_x[1], u_x[2]);
-	//ROS_INFO("u_p mean: (%.3f, %.3f, %.3f)", u_p[0], u_p[1], u_p[2]);
 
+	//Setup data for ordered scan
+	pcl::PointCloud<pcl::PointXYZ>::Ptr ordered_scan (new pcl::PointCloud<pcl::PointXYZ> ());
+	ordered_scan->width  = new_scan_pcl->width;
+	ordered_scan->height  = new_scan_pcl->height;
+	ordered_scan->points.resize(ordered_scan->width * ordered_scan->height);
 
-	//1) find the closest point in prev_scan for each point in new_scan, (offset new scan by dx and dy)
+	int cloud_size = prev_scan_pcl->points.size();
 
-	// Shift by center of mass
-	//2) minimize the distance error between each point.
-	MAT W(3, 3); W <<	0, 0, 0,	0, 0, 0,	0, 0, 0;
-	MAT xp(3, 1);
-	MAT pp(3, 1);
-	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
+	//Iterate
+	bool icp_done = false;
+	int iterations = 0;
+	pcl::KdTreeFLANN<pcl::PointXYZ> kd_tree;
+	int K = 10; //For K-nearest neighbor
+	std::vector<int> search_points_index(K);
+	std::vector<float> search_squared_distance(K);
+	while (!icp_done)
 	{
-		xp << iter_x[0], iter_x[1], iter_x[2];
-		pp << iter_p[0], iter_p[1], iter_p[2];
-	
-		xp -= u_x;
-		pp -= u_p;
+		MAT mean_prev_scan(3, 1); mean_prev_scan << 0,0,0;
+		MAT mean_new_scan(3, 1); mean_new_scan << 0,0,0;
 
-		MAT Wn(3, 3); Wn = xp * pp.transpose();
-		W += Wn;
+		//Order new_scan_pcl realtive to the nearest nighbor in prev_scan_pcl
+		kd_tree.setInputCloud(new_scan_pcl);
+		for(int i = 0; i < cloud_size; i++)
+		{	
+			pcl::PointXYZ& search_point = prev_scan_pcl->points[i];
+
+			//find nearest point in new_scan relative to search point
+			if(kd_tree.nearestKSearch(search_point, K, search_points_index, search_squared_distance) > 0)
+			{
+				int nearest_index = 0;
+				float shortest_distance = search_squared_distance[0];				
+				for(int b = 1; b < search_points_index.size(); b++)
+				{
+					if(search_squared_distance[b] < shortest_distance)
+					{
+						nearest_index = b;
+						shortest_distance = search_squared_distance[b];
+					}
+				}
+
+				ordered_scan->points[i] = prev_scan_pcl->points[nearest_index];
+			}
+			else
+			{
+				ordered_scan->points[i] = search_point;
+			}
+
+			//sum all points in cloud to compute center of mass
+			MAT point_prev_scan(3, 1); point_prev_scan << search_point.x, search_point.y, search_point.z;
+			MAT point_new_scan(3, 1); point_new_scan << ordered_scan->points[i].x, ordered_scan->points[i].y, ordered_scan->points[i].z;
+			mean_prev_scan += point_prev_scan;
+			mean_new_scan += point_new_scan;
+		}
+		search_points_index.clear(); search_squared_distance.clear();//Cleanup for next iteration
+
+		{
+			//Replace new_scan with ordered scan	
+			pcl::PointCloud<pcl::PointXYZ>::Ptr temp = new_scan_pcl;
+			new_scan_pcl = ordered_scan;
+			ordered_scan = temp;
+		}
+
+		//Shift by center of mass
+		mean_prev_scan /= (float)cloud_size;
+		mean_new_scan /= (float)cloud_size;
+
+		MAT W(3, 3); W <<	0, 0, 0,	0, 0, 0,	0, 0, 0;
+		for(int i = 0; i < cloud_size; i++)
+		{
+			MAT point_prev_scan(3, 1); point_prev_scan << prev_scan_pcl->points[i].x, prev_scan_pcl->points[i].y, prev_scan_pcl->points[i].z;
+			MAT point_new_scan(3, 1); point_new_scan << new_scan_pcl->points[i].x, new_scan_pcl->points[i].y, new_scan_pcl->points[i].z;
+			point_prev_scan -= mean_prev_scan;
+			point_new_scan -= mean_new_scan;
+			
+			MAT Wn(3, 3); Wn = point_prev_scan * point_new_scan.transpose();
+			W += Wn;
+		}
+		Eigen::JacobiSVD<MAT> svd(W, Eigen::ComputeThinU | Eigen::ComputeThinV);
+
+		//Compute Transformation
+		MAT rotation(3,3);
+		rotation = svd.matrixU() * svd.matrixV().transpose();
+		MAT translation(3, 1);
+		translation = mean_prev_scan - rotation * mean_new_scan;
+
+
+		Eigen::Matrix4f transform_matrix;
+		transform_matrix.setIdentity();	// Set to identity matrix
+		transform_matrix.block<3,3>(0,0) = rotation;
+		transform_matrix.block<3,1>(0,3) = translation;
+
+		//Apply transformation
+		pcl::transformPointCloud (*prev_scan_pcl, *ordered_scan, transform_matrix);
+		{
+			//Replace new_scan with ordered scan	
+			pcl::PointCloud<pcl::PointXYZ>::Ptr temp = new_scan_pcl;
+			new_scan_pcl = ordered_scan;
+			ordered_scan = temp;
+		}
+
+		//TODO: Store applied transformation
+
+		//Hack to break icp after fixed num iterations to start with. @TODO: use sum of squared error
+		if(iterations++ >= 10)
+		{
+			icp_done = true;
+		}
 	}
-	Eigen::JacobiSVD<MAT> svd(W, Eigen::ComputeThinU | Eigen::ComputeThinV);
-
-#if 0	//DEBUG SVD OUTPUT
-	std::cout << "W: " << W << "\n";
-	
-	std::cout << "Its singular values are:\n" << svd.singularValues() << "\n";
-	std::cout << "Its left singular vectors are the columns of the thin U matrix:\n" << svd.matrixU() << "\n";
-	std::cout << "Its right singular vectors are the columns of the thin V matrix:\n" << svd.matrixV() << "\n";
-#endif	
-
-	MAT R(3,3);
-	R = svd.matrixU() * svd.matrixV().transpose();
-	MAT t(3, 1);
-	t = u_x - R*u_p;
-
-	Eigen::Matrix4f Trans;	// Your Transformation Matrix
-	Trans.setIdentity();	// Set to Identity to make bottom row of Matrix 0,0,0,1
-	Trans.block<3,3>(0,0) = R;
-	Trans.block<3,1>(0,3) = t;
-
-	// Executing the transformation
-
-	// Minimize the sum of squared error for (R,t)
-	float E_Rt = 0.0f;
-	MAT _iter_p(3,1);	// Save iter_p[0-2] as a matrix-vector
-	MAT Rp(3,1);		// Used to rotate iter_p in the function
-
-/*
-	// vvv REMOVE vvv
-	MAT S(3,1);
-	S = svd.singularValues();
-	// ^^^ REMOVE ^^^
-*/
-	
-	for(sensor_msgs::PointCloud2Iterator<float> iter_x(prev_scan, "x"), iter_p(new_scan, "x"); iter_x != iter_x.end(); ++iter_x, ++iter_p)
-	{
-		// E(R,t) = SUM(||iter_x - R*iter_p - t||²)/num_rays
-		_iter_p << iter_p[0], iter_p[1], iter_p[2];
-		Rp = R*_iter_p;
-		float temp = pow(sqrt(pow((iter_x[0]- Rp(0,0) - t(0,0)) + (iter_x[1] - Rp(1,0) - t(1,0)) + (iter_x[2] - Rp(2,0) - t(2,0)), 2)), 2)/num_rays;
-
-	/*
-		// vvvvvvvvvvvvvvvv REMOVE vvvvvvvvvvvvvvvv
-		// E(R,t) = SUM(||xp||² + ||pp||²) - 2*SUM(singularValues)
-		xp << iter_x[0], iter_x[1], iter_x[2];
-		pp << iter_p[0], iter_p[1], iter_p[2];
-	
-		xp -= u_x;
-		pp -= u_p;
-	//				 (								||xp||							)² + (								||pp||							)²
-		float temp = pow(sqrt(pow(xp(0,0), 2) + pow(xp(1,0), 2) + pow(xp(2,0), 2)), 2) + pow(sqrt(pow(pp(0,0), 2) + pow(pp(1,0), 2) + pow(pp(2,0), 2)), 2);
-		// ^^^^^^^^^^^^^^^^ REMOVE ^^^^^^^^^^^^^^^^
-	*/
-
-		E_Rt += temp;
-	}
-/*
-	// vvvvvvvvvv REMOVE vvvvvvvvvv
-	E_Rt -= 2 * (S(0,0) + S(1,0) + S(2,0));	// I *think* this is not needed
-	// ^^^^^^^^^^ REMOVE ^^^^^^^^^^
-*/
-	ROS_INFO("Minimized sum of square error: %f", E_Rt);
-
-
-
-	
-	pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
-	// You can either apply transform_1 or transform_2; they are the same
-
-	pcl::PCLPointCloud2 pcl_pc2;
-	pcl_conversions::toPCL(new_scan, pcl_pc2);
-	pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-	pcl::fromPCLPointCloud2(pcl_pc2, *temp_cloud);
-	pcl::transformPointCloud (*temp_cloud, *transformed_cloud, Trans);
-	
-	ROS_INFO("Apply transformation");
-
 
 
 	//return new yaw and dx, dy
@@ -231,54 +235,11 @@ void scanOdomCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg, const se
 	//@Note: This won't save the first position. It will start saving from a distance NUM_GRAPH_POINTS away from (0,0)
 	if(distance_squared >= SQUARED(DIST_BETWEEN_POINTS))
 	{
-		//ROS_INFO("%d | odometry (%f, %f) | relative position (%f, %f)", scan_index, p.x, p.y, dx, dy);
+		ROS_INFO("%d | odometry (%f, %f) | relative position (%f, %f)", scan_index, p.x, p.y, dx, dy);
 		//ROS_INFO("height %d | width %d | point_bytes %d | row_bytes %d | row %d", scan3D_msg->height, scan3D_msg->width, scan3D_msg->point_step, scan3D_msg->row_step, scan3D_msg->row_step/scan3D_msg->point_step);
 
 		sensor_msgs::PointCloud2 new_cloud = *scan3D_msg;
-		static int temp_once = 0;
-		if (temp_once++ == 0)
-		{
-			int zero_counter = 0;
-			int counter = 0;
-			/*
-			for(sensor_msgs::PointCloud2Iterator<float> iter_x(new_cloud, "x"), iter_y(new_cloud, "y"), iter_z(new_cloud, "z"); iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
-			{
-				if(counter++ % 4 != 0)continue;
-				if (std::isnan(iter_x[0]) || std::isnan(iter_y[0]) || std::isnan(iter_z[0]))
-				{
-					ROS_INFO("rejected for nan in point(%f, %f, %f)\n", iter_x[0], iter_y[0], iter_z[0]);
-					continue;
-				}
-
-				if(iter_x[0] == 0 && iter_y[0] == 0 && iter_z[0] == 0) zero_counter++;
-				//if(counter % scan3D_msg->row_step / scan3D_msg->point_step == 0)
-					//ROS_INFO("%d: (%f, %f, %f)", counter, iter_x[0], iter_y[0], iter_z[0]);
-				if(counter >= scan3D_msg->row_step / scan3D_msg->point_step)break;
-			}
-			*/
-			ROS_INFO("zero_counter %d", zero_counter);
-			/*
-			ROS_INFO("int_byte_size %d", sizeof(int));
-			ROS_INFO("iterate: %d", scan3D_msg->point_step/sizeof(int));
-			for(int i = 0; i < scan3D_msg->point_step; i++)
-			{
-				if(i%4 == 0)
-					value = 0;
-				if(scan3D_msg->is_bigendian)
-				{
-					//value |= scan3D_msg->data[i] << (24 - (i%4)*8);
-					((char*)&value)[3 - i%4] = scan3D_msg->data[i];
-				}else
-				{
-					//value |= scan3D_msg->data[i] << (i%4)*8;
-					((char*)&value)[i%4] = scan3D_msg->data[i];
-				}
-				if(i%4 == 3)
-					ROS_INFO("%d - %d: value %f", temp2, i, value);
-			}
-			*/
-		}
-//Save position to compute relative distance for next scan
+		//Save position to compute relative distance for next scan
 		prev_x = p.x;
 		prev_y = p.y;
 
@@ -482,6 +443,7 @@ int main(int argc, char* argv[])
 
 	sync.registerCallback(boost::bind(&scanOdomCallback, _1, _2, _3));
 	float sensor_range = 10.0f;
+	ROS_INFO("graph_to_globalmap started");
 	while(ros::ok())
 	{
 		if(scan_index == NUM_GRAPH_POINTS)
@@ -492,7 +454,7 @@ int main(int argc, char* argv[])
 			rayTraceGlobalMap(globalmap_pub);
 		#endif
 
-			scan_index++;
+			scan_index++;//Temporary, only generate the map once.
 		}
 		ros::spinOnce();
 	}

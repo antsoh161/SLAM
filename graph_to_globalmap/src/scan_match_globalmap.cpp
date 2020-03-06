@@ -27,6 +27,7 @@
 #include <pcl/conversions.h>
 #include <pcl_ros/transforms.h>
 #include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/filters/voxel_grid.h>
 
 typedef Eigen::MatrixXf MAT;
 
@@ -80,21 +81,47 @@ float getYaw(const geometry_msgs::Quaternion quat)
 const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw, sensor_msgs::PointCloud2& new_scan, float dx, float dy, float new_yaw)
 {
 
+	#if 0
+	#define DEBUG_ICP(x) x
+	#else
+	#define DEBUG_ICP(x)
+	#endif
+
+	DEBUG_ICP(ROS_INFO("\n\n-----------ICP computation-----------");)
+
 	//Convert to pcl point cloud
 	pcl::PointCloud<pcl::PointXYZ>::Ptr prev_scan_pcl(new pcl::PointCloud<pcl::PointXYZ> ());
 	pcl::PointCloud<pcl::PointXYZ>::Ptr new_scan_pcl (new pcl::PointCloud<pcl::PointXYZ> ());
 	
 	{
-		pcl::PCLPointCloud2 temp_cloud;
-		pcl_conversions::toPCL(prev_scan, temp_cloud);
-		pcl::fromPCLPointCloud2(temp_cloud, *prev_scan_pcl);
+		pcl::PCLPointCloud2::Ptr temp_cloud (new pcl::PCLPointCloud2 ());
+		pcl::PCLPointCloud2::Ptr filtered_temp_cloud (new pcl::PCLPointCloud2 ());
+		pcl_conversions::toPCL(prev_scan, *temp_cloud);
+		
+		// Create the filtering object
+		pcl::VoxelGrid<pcl::PCLPointCloud2> voxel_filter;
+		voxel_filter.setInputCloud(temp_cloud);
+		voxel_filter.setLeafSize(0.5f, 0.5f, 0.5f);
+		voxel_filter.filter(*filtered_temp_cloud);
+		
+		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *prev_scan_pcl);
 	}
 
 	{
-		pcl::PCLPointCloud2 temp_cloud;
-		pcl_conversions::toPCL(new_scan, temp_cloud);
-		pcl::fromPCLPointCloud2(temp_cloud, *new_scan_pcl);
+		pcl::PCLPointCloud2::Ptr temp_cloud (new pcl::PCLPointCloud2 ());
+		pcl::PCLPointCloud2::Ptr filtered_temp_cloud (new pcl::PCLPointCloud2 ());
+		pcl_conversions::toPCL(new_scan, *temp_cloud);
+
+		// Create the filtering object
+		pcl::VoxelGrid<pcl::PCLPointCloud2> voxel_filter;
+		voxel_filter.setInputCloud(temp_cloud);
+		voxel_filter.setLeafSize(0.5f, 0.5f, 0.5f);
+		voxel_filter.filter(*filtered_temp_cloud);
+		
+		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *new_scan_pcl);
 	}
+
+	DEBUG_ICP(ROS_INFO("Converted PointCloud2 to pcl::PointXYZ");)
 
 	//Setup data for ordered scan
 	pcl::PointCloud<pcl::PointXYZ>::Ptr ordered_scan (new pcl::PointCloud<pcl::PointXYZ> ());
@@ -103,6 +130,8 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	ordered_scan->points.resize(ordered_scan->width * ordered_scan->height);
 
 	int cloud_size = prev_scan_pcl->points.size();
+	if(new_scan_pcl->points.size() < cloud_size)cloud_size = new_scan_pcl->points.size();
+	DEBUG_ICP(ROS_INFO("Cloud size:%d", cloud_size);)
 
 	//Iterate
 	bool icp_done = false;
@@ -111,13 +140,18 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	int K = 10; //For K-nearest neighbor
 	std::vector<int> search_points_index(K);
 	std::vector<float> search_squared_distance(K);
+	DEBUG_ICP(ROS_INFO("Setup kdTree");)
+
 	while (!icp_done)
 	{
+		DEBUG_ICP(ROS_INFO("ICP iteration: %d", iterations);)
+
 		MAT mean_prev_scan(3, 1); mean_prev_scan << 0,0,0;
 		MAT mean_new_scan(3, 1); mean_new_scan << 0,0,0;
 
 		//Order new_scan_pcl realtive to the nearest nighbor in prev_scan_pcl
 		kd_tree.setInputCloud(new_scan_pcl);
+		DEBUG_ICP(ROS_INFO("Sorting new scan");)
 		for(int i = 0; i < cloud_size; i++)
 		{	
 			pcl::PointXYZ& search_point = prev_scan_pcl->points[i];
@@ -126,7 +160,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 			if(kd_tree.nearestKSearch(search_point, K, search_points_index, search_squared_distance) > 0)
 			{
 				int nearest_index = 0;
-				float shortest_distance = search_squared_distance[0];				
+				float shortest_distance = search_squared_distance[0];
 				for(int b = 1; b < search_points_index.size(); b++)
 				{
 					if(search_squared_distance[b] < shortest_distance)
@@ -150,15 +184,10 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 			mean_new_scan += point_new_scan;
 		}
 		search_points_index.clear(); search_squared_distance.clear();//Cleanup for next iteration
-
-		{
-			//Replace new_scan with ordered scan	
-			pcl::PointCloud<pcl::PointXYZ>::Ptr temp = new_scan_pcl;
-			new_scan_pcl = ordered_scan;
-			ordered_scan = temp;
-		}
-
+		new_scan_pcl.swap(ordered_scan);
+		
 		//Shift by center of mass
+		DEBUG_ICP(ROS_INFO("Shift by center of mass");)
 		mean_prev_scan /= (float)cloud_size;
 		mean_new_scan /= (float)cloud_size;
 
@@ -176,6 +205,8 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		Eigen::JacobiSVD<MAT> svd(W, Eigen::ComputeThinU | Eigen::ComputeThinV);
 
 		//Compute Transformation
+		DEBUG_ICP(ROS_INFO("Compute transformation");)
+
 		MAT rotation(3,3);
 		rotation = svd.matrixU() * svd.matrixV().transpose();
 		MAT translation(3, 1);
@@ -187,19 +218,24 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		transform_matrix.block<3,3>(0,0) = rotation;
 		transform_matrix.block<3,1>(0,3) = translation;
 
+		Eigen::Ref<Eigen::Matrix3f> rot3x3(rotation);
+		Eigen::Vector3f euler_angles = rot3x3.eulerAngles(0, 1, 2);
+		DEBUG_ICP(ROS_INFO("Euler angles: %f, %f, %f", euler_angles[0], euler_angles[1], euler_angles[2]);)
+		DEBUG_ICP(ROS_INFO("Translation: %f, %f, %f", translation(0, 0), translation(1, 0), translation(2, 0));)
+		
 		//Apply transformation
-		pcl::transformPointCloud (*prev_scan_pcl, *ordered_scan, transform_matrix);
-		{
-			//Replace new_scan with ordered scan	
-			pcl::PointCloud<pcl::PointXYZ>::Ptr temp = new_scan_pcl;
-			new_scan_pcl = ordered_scan;
-			ordered_scan = temp;
-		}
+		DEBUG_ICP(ROS_INFO("Apply transfomation");)
+		ordered_scan->points.clear(); 
+		pcl::transformPointCloud (*new_scan_pcl, *ordered_scan, transform_matrix);
+		new_scan_pcl.swap(ordered_scan);
+
+		DEBUG_ICP(ROS_INFO("Transformation applied");)
 
 		//TODO: Store applied transformation
 
+
 		//Hack to break icp after fixed num iterations to start with. @TODO: use sum of squared error
-		if(iterations++ >= 10)
+		if(iterations++ >= 1)
 		{
 			icp_done = true;
 		}
@@ -211,6 +247,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	pos.dx = dx;
 	pos.dy = dy;
 	pos.yaw = new_yaw;
+	DEBUG_ICP(ROS_INFO("\n-----------ICP DONE------------------\n\n");)
 	return pos;
 }
 

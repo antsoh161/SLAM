@@ -28,6 +28,7 @@
 #include <pcl_ros/transforms.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/filter.h>
 
 typedef Eigen::MatrixXf MAT;
 
@@ -119,8 +120,9 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		voxel_filter.filter(*filtered_temp_cloud);
 
 		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *new_scan_pcl);
-	}
 
+		new_scan_pcl->is_dense = false;
+	}
 	DEBUG_ICP(ROS_INFO("Converted PointCloud2 to pcl::PointXYZ");)
 
 	//Setup data for ordered scan
@@ -142,8 +144,6 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	std::vector<float> search_squared_distance(K);
 	DEBUG_ICP(ROS_INFO("Setup kdTree");)
 
-
-	float nan = std::numeric_limits<float>::quiet_NaN();
 	while (!icp_done)
 	{
 		DEBUG_ICP(ROS_INFO("ICP iteration: %d", iterations);)
@@ -161,23 +161,19 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 			//find nearest point in new_scan relative to search point
 			if(kd_tree.nearestKSearch(search_point, K, search_points_index, search_squared_distance) > 0)
 			{
-				int nearest_index = 0;
+				int nearest_index = search_points_index[0];
 				float shortest_distance = search_squared_distance[0];
 				for(int b = 1; b < search_points_index.size(); b++)
 				{
 					if(search_squared_distance[b] < shortest_distance)
 					{
-						nearest_index = b;
+						nearest_index = search_points_index[b];
 						shortest_distance = search_squared_distance[b];
 					}
 				}
 				ordered_scan->points[i] = prev_scan_pcl->points[nearest_index];
 
-
-				//Remove visited point from sorting
-				new_scan_pcl->points[nearest_index].x = nan;
-				new_scan_pcl->points[nearest_index].y = nan;
-				new_scan_pcl->points[nearest_index].z = nan;
+				new_scan_pcl->points.erase(new_scan_pcl->points.begin() + nearest_index);
 			}
 			else
 			{
@@ -194,15 +190,13 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		search_points_index.clear(); search_squared_distance.clear();//Cleanup for next iteration
 		new_scan_pcl.swap(ordered_scan);
 
+		DEBUG_ICP(
 		for(int i = 0; i < cloud_size; i++)
 		{
-			pcl::PointXYZ& p = ordered_scan->points[i];
-			if(p.x != nan && p.y != nan && p.z != nan)
-				DEBUG_ICP(ROS_INFO("ERROR - this should be NAN %d: (%f, %f, %f))", i, p.x, p.y, p.z);)
-
-			if(i % 10 == 0)
-				DEBUG_ICP(ROS_INFO("POINT %d: (%f, %f, %f))", i, new_scan_pcl->points[i].x,  new_scan_pcl->points[i].y,  new_scan_pcl->points[i].z);)
+			if(i % 100 == 0)
+				ROS_INFO("POINT %d: (%f, %f, %f))", i, new_scan_pcl->points[i].x,  new_scan_pcl->points[i].y,  new_scan_pcl->points[i].z);
 		}
+		)
 
 		//Shift by center of mass
 		DEBUG_ICP(ROS_INFO("Shift by center of mass");)
@@ -250,10 +244,31 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		DEBUG_ICP(ROS_INFO("Transformation applied");)
 
 		//TODO: Store applied transformation
+		float error = 0;
+		for(int i = 0; i < cloud_size; i++)
+		{
+			MAT point_prev_scan(3, 1); point_prev_scan << prev_scan_pcl->points[i].x, prev_scan_pcl->points[i].y, prev_scan_pcl->points[i].z;
+			MAT point_new_scan(3, 1); point_new_scan << new_scan_pcl->points[i].x, new_scan_pcl->points[i].y, new_scan_pcl->points[i].z;
+			point_prev_scan -= mean_prev_scan;
+			point_new_scan -= mean_new_scan;
+
+			float x2 = 
+			point_prev_scan(0, 0) * point_prev_scan(0, 0) + 
+			point_prev_scan(1, 0) * point_prev_scan(1, 0) +
+			point_prev_scan(2, 0) * point_prev_scan(2, 0);
 
 
+			float y2 = 
+			point_new_scan(0, 0) * point_new_scan(0, 0) + 
+			point_new_scan(1, 0) * point_new_scan(1, 0) +
+			point_new_scan(2, 0) * point_new_scan(2, 0);
+			
+			error += sqrt(x2) + sqrt(y2) - 2*(svd.singularValues()[0] + svd.singularValues()[1] + svd.singularValues()[2]); 
+		}
+		ROS_INFO("%f", error);
 		//Hack to break icp after fixed num iterations to start with. @TODO: use sum of squared error
-		if(iterations++ >= 1)
+
+		if(++iterations >= 10)
 		{
 			icp_done = true;
 		}

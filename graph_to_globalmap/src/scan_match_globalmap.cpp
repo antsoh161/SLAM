@@ -81,7 +81,7 @@ float getYaw(const geometry_msgs::Quaternion quat)
 const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw, sensor_msgs::PointCloud2& new_scan, float dx, float dy, float new_yaw)
 {
 
-	#if 0
+	#if 1
 	#define DEBUG_ICP(x) x
 	#else
 	#define DEBUG_ICP(x)
@@ -92,18 +92,18 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	//Convert to pcl point cloud
 	pcl::PointCloud<pcl::PointXYZ>::Ptr prev_scan_pcl(new pcl::PointCloud<pcl::PointXYZ> ());
 	pcl::PointCloud<pcl::PointXYZ>::Ptr new_scan_pcl (new pcl::PointCloud<pcl::PointXYZ> ());
-	
+
 	{
 		pcl::PCLPointCloud2::Ptr temp_cloud (new pcl::PCLPointCloud2 ());
 		pcl::PCLPointCloud2::Ptr filtered_temp_cloud (new pcl::PCLPointCloud2 ());
 		pcl_conversions::toPCL(prev_scan, *temp_cloud);
-		
+
 		// Create the filtering object
 		pcl::VoxelGrid<pcl::PCLPointCloud2> voxel_filter;
 		voxel_filter.setInputCloud(temp_cloud);
 		voxel_filter.setLeafSize(0.5f, 0.5f, 0.5f);
 		voxel_filter.filter(*filtered_temp_cloud);
-		
+
 		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *prev_scan_pcl);
 	}
 
@@ -117,7 +117,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		voxel_filter.setInputCloud(temp_cloud);
 		voxel_filter.setLeafSize(0.5f, 0.5f, 0.5f);
 		voxel_filter.filter(*filtered_temp_cloud);
-		
+
 		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *new_scan_pcl);
 	}
 
@@ -142,6 +142,8 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	std::vector<float> search_squared_distance(K);
 	DEBUG_ICP(ROS_INFO("Setup kdTree");)
 
+
+	float nan = std::numeric_limits<float>::quiet_NaN();
 	while (!icp_done)
 	{
 		DEBUG_ICP(ROS_INFO("ICP iteration: %d", iterations);)
@@ -153,7 +155,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		kd_tree.setInputCloud(new_scan_pcl);
 		DEBUG_ICP(ROS_INFO("Sorting new scan");)
 		for(int i = 0; i < cloud_size; i++)
-		{	
+		{
 			pcl::PointXYZ& search_point = prev_scan_pcl->points[i];
 
 			//find nearest point in new_scan relative to search point
@@ -169,12 +171,18 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 						shortest_distance = search_squared_distance[b];
 					}
 				}
-
 				ordered_scan->points[i] = prev_scan_pcl->points[nearest_index];
+
+
+				//Remove visited point from sorting
+				new_scan_pcl->points[nearest_index].x = nan;
+				new_scan_pcl->points[nearest_index].y = nan;
+				new_scan_pcl->points[nearest_index].z = nan;
 			}
 			else
 			{
 				ordered_scan->points[i] = search_point;
+				ROS_INFO("ERROR: Couldn't find closest point");
 			}
 
 			//sum all points in cloud to compute center of mass
@@ -185,7 +193,17 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		}
 		search_points_index.clear(); search_squared_distance.clear();//Cleanup for next iteration
 		new_scan_pcl.swap(ordered_scan);
-		
+
+		for(int i = 0; i < cloud_size; i++)
+		{
+			pcl::PointXYZ& p = ordered_scan->points[i];
+			if(p.x != nan && p.y != nan && p.z != nan)
+				DEBUG_ICP(ROS_INFO("ERROR - this should be NAN %d: (%f, %f, %f))", i, p.x, p.y, p.z);)
+
+			if(i % 10 == 0)
+				DEBUG_ICP(ROS_INFO("POINT %d: (%f, %f, %f))", i, new_scan_pcl->points[i].x,  new_scan_pcl->points[i].y,  new_scan_pcl->points[i].z);)
+		}
+
 		//Shift by center of mass
 		DEBUG_ICP(ROS_INFO("Shift by center of mass");)
 		mean_prev_scan /= (float)cloud_size;
@@ -198,7 +216,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 			MAT point_new_scan(3, 1); point_new_scan << new_scan_pcl->points[i].x, new_scan_pcl->points[i].y, new_scan_pcl->points[i].z;
 			point_prev_scan -= mean_prev_scan;
 			point_new_scan -= mean_new_scan;
-			
+
 			MAT Wn(3, 3); Wn = point_prev_scan * point_new_scan.transpose();
 			W += Wn;
 		}
@@ -222,10 +240,10 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		Eigen::Vector3f euler_angles = rot3x3.eulerAngles(0, 1, 2);
 		DEBUG_ICP(ROS_INFO("Euler angles: %f, %f, %f", euler_angles[0], euler_angles[1], euler_angles[2]);)
 		DEBUG_ICP(ROS_INFO("Translation: %f, %f, %f", translation(0, 0), translation(1, 0), translation(2, 0));)
-		
+
 		//Apply transformation
 		DEBUG_ICP(ROS_INFO("Apply transfomation");)
-		ordered_scan->points.clear(); 
+		ordered_scan->points.clear();
 		pcl::transformPointCloud (*new_scan_pcl, *ordered_scan, transform_matrix);
 		new_scan_pcl.swap(ordered_scan);
 

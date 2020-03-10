@@ -93,7 +93,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	//Convert to pcl point cloud
 	pcl::PointCloud<pcl::PointXYZ>::Ptr prev_scan_pcl(new pcl::PointCloud<pcl::PointXYZ> ());
 	pcl::PointCloud<pcl::PointXYZ>::Ptr new_scan_pcl (new pcl::PointCloud<pcl::PointXYZ> ());
-
+#define VOXEL_SIZE 1.0f
 	{
 		pcl::PCLPointCloud2::Ptr temp_cloud (new pcl::PCLPointCloud2 ());
 		pcl::PCLPointCloud2::Ptr filtered_temp_cloud (new pcl::PCLPointCloud2 ());
@@ -102,7 +102,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		// Create the filtering object
 		pcl::VoxelGrid<pcl::PCLPointCloud2> voxel_filter;
 		voxel_filter.setInputCloud(temp_cloud);
-		voxel_filter.setLeafSize(0.5f, 0.5f, 0.5f);
+		voxel_filter.setLeafSize(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE);
 		voxel_filter.filter(*filtered_temp_cloud);
 
 		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *prev_scan_pcl);
@@ -116,7 +116,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		// Create the filtering object
 		pcl::VoxelGrid<pcl::PCLPointCloud2> voxel_filter;
 		voxel_filter.setInputCloud(temp_cloud);
-		voxel_filter.setLeafSize(0.5f, 0.5f, 0.5f);
+		voxel_filter.setLeafSize(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE);
 		voxel_filter.filter(*filtered_temp_cloud);
 
 		pcl::fromPCLPointCloud2(*filtered_temp_cloud, *new_scan_pcl);
@@ -144,12 +144,53 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 	std::vector<float> search_squared_distance(K);
 	DEBUG_ICP(ROS_INFO("Setup kdTree");)
 
+
+	
+	//Shift by center of mass
+	DEBUG_ICP(ROS_INFO("Shift by center of mass");)
+	//Prev scan shifting
+	MAT mean_prev_scan(3, 1); mean_prev_scan << 0,0,0;
+	int size_prev = prev_scan_pcl->points.size();
+	for(int i = 0; i < size_prev; i++)
+	{
+		//sum all points in cloud to compute center of mass
+		MAT point_prev_scan(3, 1); point_prev_scan << prev_scan_pcl->points[i].x, prev_scan_pcl->points[i].y, prev_scan_pcl->points[i].z;
+		mean_prev_scan += point_prev_scan;
+	}
+	mean_prev_scan /= (float)size_prev;
+
+	for(int i = 0; i < size_prev; i++)
+	{
+		pcl::PointXYZ& p = prev_scan_pcl->points[i];
+		p.x -= mean_prev_scan(0,0);
+		p.y -= mean_prev_scan(1,0);
+		p.z -= mean_prev_scan(2,0);
+	}
+	
+	//new scan shifting
+	MAT mean_new_scan(3, 1); mean_new_scan << 0,0,0;
+	int size_new = new_scan_pcl->points.size();
+	for(int i = 0; i < size_new; i++)
+	{
+		//sum all points in cloud to compute center of mass
+		MAT point_new_scan(3, 1); point_new_scan << new_scan_pcl->points[i].x, new_scan_pcl->points[i].y, new_scan_pcl->points[i].z;
+		mean_new_scan += point_new_scan;
+	}	
+	
+	mean_new_scan /= (float)size_new;
+
+	for(int i = 0; i < size_new; i++)
+	{
+		pcl::PointXYZ& p = new_scan_pcl->points[i];
+		p.x -= mean_new_scan(0,0);
+		p.y -= mean_new_scan(1,0);
+		p.z -= mean_new_scan(2,0);
+	}
+
+
 	while (!icp_done)
 	{
 		DEBUG_ICP(ROS_INFO("ICP iteration: %d", iterations);)
-
-		MAT mean_prev_scan(3, 1); mean_prev_scan << 0,0,0;
-		MAT mean_new_scan(3, 1); mean_new_scan << 0,0,0;
 
 		//Order new_scan_pcl realtive to the nearest nighbor in prev_scan_pcl
 		kd_tree.setInputCloud(new_scan_pcl);
@@ -171,21 +212,13 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 						shortest_distance = search_squared_distance[b];
 					}
 				}
-				ordered_scan->points[i] = prev_scan_pcl->points[nearest_index];
-
-				new_scan_pcl->points.erase(new_scan_pcl->points.begin() + nearest_index);
+				ordered_scan->points[i] = new_scan_pcl->points[nearest_index];
 			}
 			else
 			{
 				ordered_scan->points[i] = search_point;
 				ROS_INFO("ERROR: Couldn't find closest point");
 			}
-
-			//sum all points in cloud to compute center of mass
-			MAT point_prev_scan(3, 1); point_prev_scan << search_point.x, search_point.y, search_point.z;
-			MAT point_new_scan(3, 1); point_new_scan << ordered_scan->points[i].x, ordered_scan->points[i].y, ordered_scan->points[i].z;
-			mean_prev_scan += point_prev_scan;
-			mean_new_scan += point_new_scan;
 		}
 		search_points_index.clear(); search_squared_distance.clear();//Cleanup for next iteration
 		new_scan_pcl.swap(ordered_scan);
@@ -198,26 +231,19 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		}
 		)
 
-		//Shift by center of mass
-		DEBUG_ICP(ROS_INFO("Shift by center of mass");)
-		mean_prev_scan /= (float)cloud_size;
-		mean_new_scan /= (float)cloud_size;
-
+		//Compute Transformation
+		DEBUG_ICP(ROS_INFO("Compute transformation");)
 		MAT W(3, 3); W <<	0, 0, 0,	0, 0, 0,	0, 0, 0;
 		for(int i = 0; i < cloud_size; i++)
 		{
 			MAT point_prev_scan(3, 1); point_prev_scan << prev_scan_pcl->points[i].x, prev_scan_pcl->points[i].y, prev_scan_pcl->points[i].z;
 			MAT point_new_scan(3, 1); point_new_scan << new_scan_pcl->points[i].x, new_scan_pcl->points[i].y, new_scan_pcl->points[i].z;
-			point_prev_scan -= mean_prev_scan;
-			point_new_scan -= mean_new_scan;
 
 			MAT Wn(3, 3); Wn = point_prev_scan * point_new_scan.transpose();
 			W += Wn;
 		}
 		Eigen::JacobiSVD<MAT> svd(W, Eigen::ComputeThinU | Eigen::ComputeThinV);
 
-		//Compute Transformation
-		DEBUG_ICP(ROS_INFO("Compute transformation");)
 
 		MAT rotation(3,3);
 		rotation = svd.matrixU() * svd.matrixV().transpose();
@@ -241,6 +267,12 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		pcl::transformPointCloud (*new_scan_pcl, *ordered_scan, transform_matrix);
 		new_scan_pcl.swap(ordered_scan);
 
+
+		//@TODO: Apply transformation to center of mass
+		//mean_prev_scan
+		//mean_new_scan
+
+
 		DEBUG_ICP(ROS_INFO("Transformation applied");)
 
 		//TODO: Store applied transformation
@@ -249,8 +281,6 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		{
 			MAT point_prev_scan(3, 1); point_prev_scan << prev_scan_pcl->points[i].x, prev_scan_pcl->points[i].y, prev_scan_pcl->points[i].z;
 			MAT point_new_scan(3, 1); point_new_scan << new_scan_pcl->points[i].x, new_scan_pcl->points[i].y, new_scan_pcl->points[i].z;
-			point_prev_scan -= mean_prev_scan;
-			point_new_scan -= mean_new_scan;
 
 			float x2 = 
 			point_prev_scan(0, 0) * point_prev_scan(0, 0) + 
@@ -268,7 +298,7 @@ const Position scanMatchICP(sensor_msgs::PointCloud2& prev_scan, float prev_yaw,
 		ROS_INFO("%f", error);
 		//Hack to break icp after fixed num iterations to start with. @TODO: use sum of squared error
 
-		if(++iterations >= 10)
+		if(++iterations >= 3)
 		{
 			icp_done = true;
 		}
